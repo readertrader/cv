@@ -8,8 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import MultiStepLR
 from tqdm import tqdm
-from utils import DEVICE, change_yaw, synthesize_data, normalize, unnormalize, unnormalize_tensor
-from losses import diou_loss_batch, ciou_loss_batch
+from utils import DEVICE, synthesize_data, normalize, unnormalize, unnormalize_tensor
+from losses import ciou_loss, diou_loss
 
 
 class Backbone(nn.Module):
@@ -116,8 +116,8 @@ def train(model: StarModel, dl: StarDataset, num_epochs: int, optimizer, loss_fn
                     torch.unsqueeze(unnormalize_tensor(preds), 1),
                     torch.unsqueeze(unnormalize_tensor(label), 1)
                 )
-                epoch_ious.append(iou)
-                epoch_losses.append(loss)
+                epoch_ious.append(iou.cpu().detach().numpy())
+                epoch_losses.append(loss.cpu().detach().numpy())
             else:
                 loss = loss_fn(preds, label)
                 epoch_losses.append(loss.cpu().detach().numpy())
@@ -137,7 +137,7 @@ def main():
     model = StarModel().to(DEVICE)
     # Initialize loss functions and optimizer for localization
     optimizer = torch.optim.Adam(model.parameters())
-    loss_localizer = diou_loss_batch
+    loss_localizer = diou_loss
     epochs = 50
     batch_size = 64
     scheduler = MultiStepLR(optimizer, milestones=[20, 40], gamma=0.1)
