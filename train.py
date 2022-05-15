@@ -113,8 +113,8 @@ def train(model: StarModel, dl: StarDataset, num_epochs: int, optimizer, loss_fn
             preds = model(image)
             if localizer:
                 loss, iou = loss_fn(
-                    torch.unsqueeze(unnormalize_tensor(preds), 1),
-                    torch.unsqueeze(unnormalize_tensor(label), 1)
+                    torch.unsqueeze(unnormalize_tensor(preds), 1).to(DEVICE),
+                    torch.unsqueeze(unnormalize_tensor(label), 1).to(DEVICE)
                 )
                 epoch_ious.append(iou.cpu().detach().numpy())
                 epoch_losses.append(loss.cpu().detach().numpy())
@@ -137,14 +137,14 @@ def main():
     model = StarModel().to(DEVICE)
     # Initialize loss functions and optimizer for localization
     optimizer = torch.optim.Adam(model.parameters())
-    loss_localizer = diou_loss
-    epochs = 50
+    loss_localizer = ciou_loss
+    epochs = 75
     batch_size = 64
     scheduler = MultiStepLR(optimizer, milestones=[20, 40], gamma=0.1)
     # Train the localizer
     star_model = train(
         model,
-        torch.utils.data.DataLoader(StarDataset(data_size=128000), batch_size=batch_size, shuffle=True),
+        torch.utils.data.DataLoader(StarDataset(data_size=64000), batch_size=batch_size, shuffle=True),
         num_epochs=epochs,
         optimizer=optimizer,
         loss_fn=loss_localizer, 
@@ -173,6 +173,8 @@ def main():
         scheduler=scheduler
     )
     torch.save(star_model.state_dict(), "model.pickle")
+
+
 
 
 if __name__ == "__main__":
