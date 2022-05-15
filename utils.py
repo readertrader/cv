@@ -93,28 +93,6 @@ def _height_stretch() -> float:
 def _roundness() -> float:
     return np.clip(np.random.normal(0.25, 0.2 / 3), 0.10, 0.40)
 
-def make_batch(batch_size, has_star=True):
-    """
-    Args:
-        batch_size:
-            Generates batch_size number of images
-        has_star:
-            makes batches with only stars if true
-            makes randomly generated batches based on synthesize data if false
-    """
-    imgs, labels = zip(*[synthesize_data(has_star=has_star) for _ in range(batch_size)])
-    # Stack into array
-    imgs = np.stack(imgs)
-    labels = np.stack(labels)
-    # Change the yaw from [0,2*pi) to [0,pi) since the bounding box will still be identical
-    labels = change_yaw(labels)
-    # Convert from numpy to torch
-    imgs = torch.from_numpy(np.asarray(imgs, dtype=np.float32))
-    labels = torch.from_numpy(np.asarray(labels, dtype=np.float32))
-    imgs = torch.unsqueeze(imgs, 1)
-    return imgs, labels
-
-
 def synthesize_data(
     has_star: bool = None,
     noise_level: float = 0.2,
@@ -203,9 +181,6 @@ def calc_iou_array(pred, label):
         arr[i] = t.intersection(p).area / t.union(p).area
     return arr.view([-1,1])
 
-def _rotate(points: np.ndarray, theta: float) -> np.ndarray:
-    return points @ np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
-
 def to_corners(arr):
     batch = arr.size()[0]
     x = torch.FloatTensor([1, -1, -1, 1]).unsqueeze(0).unsqueeze(0).to(arr.device)
@@ -228,17 +203,6 @@ def to_corners(arr):
     rotated[..., 0] += x1
     rotated[..., 1] += y1
     return rotated
-
-def enclosing_box_length(pred, label):
-    B = pred.size()[0]
-    arr = torch.zeros(B).to(pred.device)
-    matr_w = torch.cat([pred[...,0], label[...,0]], dim=-1)
-    matr_h = torch.cat([pred[...,1], label[...,1]], dim=-1)
-    min_w = torch.min(matr_w,2).values
-    max_w = torch.max(matr_w,2).values
-    min_h = torch.min(matr_h,2).values
-    max_h = torch.max(matr_h,2).values
-    return torch.pow((max_h - min_h), 2) + torch.pow((max_w - min_w),2)
 
 def normalize(label, img_size=200):
     normalized_center = label[0:2] / img_size

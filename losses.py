@@ -18,7 +18,7 @@ def modulated_loss(pred, label):
     )
 
     return lmr
-
+# KFIOU implementation from https://github.com/open-mmlab/mmrotate/blob/main/mmrotate/models/losses/kf_iou_loss.py
 def xy_wh_r_2_xy_sigma(xywhr):
     """Convert oriented bounding box to 2-D Gaussian distribution.
     Args:
