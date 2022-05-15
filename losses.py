@@ -4,6 +4,25 @@ import torch
 from utils import calc_iou, enclosing_box_length, calc_iou_array, to_corners, DEVICE
 import numpy as np
 
+
+def modulated_loss(pred, label):
+    x1, x2 = pred[:, 0], label[:, 0]
+    y1, y2 = pred[:, 1], label[:, 1]
+    yaw1, yaw2 = pred[:, 2], label[:, 2]
+    w1, w2 = pred[:, 3], label[:, 3]
+    h1, h2 = pred[:, 4], label[:, 4]
+    lcp = torch.abs(x1 - x2) + torch.abs(y1 - y2)
+    lmr = torch.min(
+        lcp + torch.abs(w1 - w2) + torch.abs(h1 - h2) + torch.abs(yaw1 - yaw2),
+        lcp
+        + torch.abs(w1 - h2)
+        + torch.abs(h1 - w2)
+        + torch.abs(torch.pi/2 - torch.abs(yaw1 - yaw2)),
+    )
+
+    return lmr
+
+
 def ciou_loss_batch(pred, gt, reduction='none'):
     losses = []
     ious = []
@@ -61,6 +80,7 @@ def diou_loss(
     iou = calc_iou_array(preds8, labels8).to(DEVICE)
     c2 = enclosing_box_length(preds8, labels8).to(DEVICE) + eps
     d2 = torch.pow((preds[...,0] - labels[...,0]),2) + torch.pow((preds[...,1] - labels[...,1]),2).to(DEVICE)
+    
     loss = 1 - iou + (d2 / c2)
     if yaw:
         loss += torch.abs(preds[...,2] - labels[...,2]) / labels[...,2]
