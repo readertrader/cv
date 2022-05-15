@@ -196,7 +196,7 @@ def calc_iou(pred, label):
 
 def calc_iou_array(pred, label):
     B = pred.size()[0]
-    arr = torch.zeros(B)
+    arr = torch.zeros(B).to(pred.device)
     for i in range(B):
         p = Polygon(pred[i][0])
         t = Polygon(label[i][0])
@@ -231,7 +231,7 @@ def to_corners(arr):
 
 def enclosing_box_length(pred, label):
     B = pred.size()[0]
-    arr = torch.zeros(B)
+    arr = torch.zeros(B).to(pred.device)
     matr_w = torch.cat([pred[...,0], label[...,0]], dim=-1)
     matr_h = torch.cat([pred[...,1], label[...,1]], dim=-1)
     min_w = torch.min(matr_w,2).values
