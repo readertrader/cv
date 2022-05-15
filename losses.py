@@ -1,7 +1,7 @@
 # Taken from https://github.com/facebookresearch/detectron2
 import math
 import torch
-from utils import calc_iou, enclosing_box_length, calc_iou_array, to_corners
+from utils import calc_iou, enclosing_box_length, calc_iou_array, to_corners, DEVICE
 import numpy as np
 
 def ciou_loss_batch(pred, gt, reduction='none'):
@@ -60,7 +60,7 @@ def diou_loss(
     labels8 = to_corners(labels)
     iou = calc_iou_array(preds8, labels8)
     c2 = enclosing_box_length(preds8, labels8) + eps
-    d2 = torch.pow((preds[...,0] - labels[...,0]),2) + torch.pow((preds[...,1] - labels[...,1]),2)
+    d2 = torch.pow((preds[...,0] - labels[...,0]),2) + torch.pow((preds[...,1] - labels[...,1]),2).to(DEVICE)
     loss = 1 - iou + (d2 / c2)
     if yaw:
         loss += torch.abs(preds[...,2] - labels[...,2]) / labels[...,2]
