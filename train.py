@@ -8,10 +8,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import MultiStepLR
 from tqdm import tqdm
-from utils import DEVICE, synthesize_data, normalize, unnormalize, unnormalize_tensor
-from losses import ciou_loss, diou_loss
+from utils import DEVICE, synthesize_data, normalize, unnormalize, unnormalize_tensor, to_corners, calc_iou_array
+from losses import modulated_loss
 
-
+# Backbone/low level feature learner
 class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
@@ -37,9 +37,10 @@ class Backbone(nn.Module):
         x = torch.flatten(x,1)
         return x
 
-class Localizer(nn.Module):
+# Detects/regresses bounding box and angle
+class Detector(nn.Module):
     def __init__(self):
-        super(Localizer, self).__init__()
+        super(Detector, self).__init__()
         self.fc1 = nn.Linear(16*12*12, 128)
         self.fc2 = nn.Linear(128,5)
 
@@ -50,6 +51,7 @@ class Localizer(nn.Module):
         x = F.sigmoid(self.fc2(x))
         return x
 
+# Classifies if star or not
 class Classifier(nn.Module):
     def __init__(self):
         super(Classifier, self).__init__()
@@ -63,22 +65,24 @@ class Classifier(nn.Module):
         x = F.sigmoid(self.fc2(x))
         return x
 
+# Combine the 3 models
 class StarModel(nn.Module):
     def __init__(self):
         super(StarModel, self).__init__()
         self.backbone = Backbone()
-        self.localizer = Localizer()
+        self.detector = Detector()
         self.classifier = Classifier()
-        self.head = 'localizer'
+        self.head = 'detector'
 
     def forward(self, x):
         x = self.backbone(x)
-        if self.head == 'localizer':
-            return self.localizer(x)
+        if self.head == 'detector':
+            return self.detector(x)
         else:
             return self.classifier(x)
 
-
+# Dataloader
+# Normalizes the label
 class StarDataset(torch.utils.data.Dataset):
     """Return star image and labels"""
 
@@ -106,20 +110,24 @@ def train(model: StarModel, dl: StarDataset, num_epochs: int, optimizer, loss_fn
         print(f"EPOCH: {epoch}")
         epoch_losses = []
         epoch_ious = []
-        for image, label in tqdm(dl, total=len(dl)):
+        for image, labels in tqdm(dl, total=len(dl)):
             image = image.to(DEVICE).float()
-            label = label.to(DEVICE).float()
+            labels = labels.to(DEVICE).float()
             optimizer.zero_grad()
             preds = model(image)
             if localizer:
-                loss, iou = loss_fn(
-                    torch.unsqueeze(unnormalize_tensor(preds), 1).to(DEVICE),
-                    torch.unsqueeze(unnormalize_tensor(label), 1).to(DEVICE)
+                loss = loss_fn(
+                    unnormalize_tensor(preds).to(DEVICE),
+                    unnormalize_tensor(labels).to(DEVICE)
                 )
+                loss = torch.mean(loss)
+                preds8 = to_corners(torch.unsqueeze(unnormalize_tensor(preds), 1).to(DEVICE))
+                labels8 = to_corners(torch.unsqueeze(unnormalize_tensor(labels), 1).to(DEVICE))
+                iou = calc_iou_array(preds8, labels8).to(DEVICE)
                 epoch_ious.append(iou.cpu().detach().numpy())
                 epoch_losses.append(loss.cpu().detach().numpy())
             else:
-                loss = loss_fn(preds, label)
+                loss = loss_fn(preds, labels)
                 epoch_losses.append(loss.cpu().detach().numpy())
             loss.backward()
             optimizer.step()
@@ -137,9 +145,9 @@ def main():
     model = StarModel().to(DEVICE)
     # Initialize loss functions and optimizer for localization
     optimizer = torch.optim.Adam(model.parameters())
-    loss_localizer = ciou_loss
-    epochs = 75
-    batch_size = 64
+    loss_localizer = modulated_loss
+    epochs = 50
+    batch_size = 128
     scheduler = MultiStepLR(optimizer, milestones=[20, 40], gamma=0.1)
     # Train the localizer
     star_model = train(

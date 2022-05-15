@@ -1,9 +1,6 @@
-# Taken from https://github.com/facebookresearch/detectron2
-import math
 import torch
-from utils import calc_iou, enclosing_box_length, calc_iou_array, to_corners, DEVICE
-import numpy as np
-
+from utils import DEVICE
+from torch import nn
 
 def modulated_loss(pred, label):
     x1, x2 = pred[:, 0], label[:, 0]
@@ -22,200 +19,145 @@ def modulated_loss(pred, label):
 
     return lmr
 
-
-def ciou_loss_batch(pred, gt, reduction='none'):
-    losses = []
-    ious = []
-    for i in range(len(gt)):
-        loss, iou = ciou_loss(pred[i], gt[i])
-        losses.append(loss)
-        ious.append(iou)
-    losses = np.array(losses)
-    ious = np.array(ious)
-    if reduction == "mean":
-        losses = losses.mean()
-        ious = ious.mean()
-    return losses, ious
-
-def diou_loss_batch(pred, gt, reduction='none', yaw=False):
-    losses = []
-    ious = []
-    for i in range(len(gt)):
-        loss, iou = diou_loss(pred[i], gt[i], yaw)
-        losses.append(loss)
-        ious.append(iou)
-    losses = np.array(losses)
-    ious = np.array(ious)
-    if reduction == "mean":
-        losses = losses.mean()
-        ious = ious.mean()
-    return losses, ious
-
-def ciou_loss(
-    preds,
-    labels,
-    reduction='mean',
-    eps: float = 1e-7,
-):
-    dloss, iou = diou_loss(preds, labels, reduction='none')
-    v = (4 / (torch.pi ** 2)) * torch.pow((preds[...,2] - labels[...,2]), 2)
-    with torch.no_grad():
-        alpha = v / (1 - iou + v + eps)
-
-    loss = dloss + alpha * v
-    if reduction == "mean":
-        loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
-        iou = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
-    return loss, iou
-
-def diou_loss(
-    preds,
-    labels,
-    reduction="mean",
-    yaw: bool = False,
-    eps: float = 1e-7,
-):
-    preds8 = to_corners(preds)
-    labels8 = to_corners(labels)
-    iou = calc_iou_array(preds8, labels8).to(DEVICE)
-    c2 = enclosing_box_length(preds8, labels8).to(DEVICE) + eps
-    d2 = torch.pow((preds[...,0] - labels[...,0]),2) + torch.pow((preds[...,1] - labels[...,1]),2).to(DEVICE)
-    
-    loss = 1 - iou + (d2 / c2)
-    if yaw:
-        loss += torch.abs(preds[...,2] - labels[...,2]) / labels[...,2]
-    if reduction == "mean":
-        loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
-        iou = iou.mean() if iou.numel() > 0 else 0.0 * iou.sum()
-    return loss, iou
-
-
-def diou_loss_original(
-    boxes1: torch.Tensor,
-    boxes2: torch.Tensor,
-    reduction: str = "none",
-    eps: float = 1e-7,
-) -> torch.Tensor:
-    """
-    Distance Intersection over Union Loss (Zhaohui Zheng et. al)
-    https://arxiv.org/abs/1911.08287
+def xy_wh_r_2_xy_sigma(xywhr):
+    """Convert oriented bounding box to 2-D Gaussian distribution.
     Args:
-        boxes1, boxes2 (Tensor): box locations in XYXY format, shape (N, 4) or (4,).
-        reduction: 'none' | 'mean' | 'sum'
-                 'none': No reduction will be applied to the output.
-                 'mean': The output will be averaged.
-                 'sum': The output will be summed.
-        eps (float): small number to prevent division by zero
+        xywhr (torch.Tensor): rbboxes with shape (N, 5).
+    Returns:
+        xy (torch.Tensor): center point of 2-D Gaussian distribution
+            with shape (N, 2).
+        sigma (torch.Tensor): covariance matrix of 2-D Gaussian distribution
+            with shape (N, 2, 2).
     """
+    _shape = xywhr.shape
+    assert _shape[-1] == 5
+    xy = xywhr[..., :2]
+    wh = xywhr[..., 3:5].clamp(min=1e-7, max=1e7).reshape(-1, 2)
+    r = xywhr[..., 2]
+    cos_r = torch.cos(r)
+    sin_r = torch.sin(r)
+    R = torch.stack((cos_r, -sin_r, sin_r, cos_r), dim=-1).reshape(-1, 2, 2)
+    S = 0.5 * torch.diag_embed(wh)
 
-    x1, y1, x2, y2 = boxes1.unbind(dim=-1)
-    x1g, y1g, x2g, y2g = boxes2.unbind(dim=-1)
+    sigma = R.bmm(S.square()).bmm(R.permute(0, 2,
+                                            1)).reshape(_shape[:-1] + (2, 2))
 
-    # TODO: use torch._assert_async() when pytorch 1.8 support is dropped
-    assert (x2 >= x1).all(), "bad box: x1 larger than x2"
-    assert (y2 >= y1).all(), "bad box: y1 larger than y2"
+    return xy, sigma
 
-    # Intersection keypoints
-    xkis1 = torch.max(x1, x1g)
-    ykis1 = torch.max(y1, y1g)
-    xkis2 = torch.min(x2, x2g)
-    ykis2 = torch.min(y2, y2g)
-
-    intsct = torch.zeros_like(x1)
-    mask = (ykis2 > ykis1) & (xkis2 > xkis1)
-    intsct[mask] = (xkis2[mask] - xkis1[mask]) * (ykis2[mask] - ykis1[mask])
-    union = (x2 - x1) * (y2 - y1) + (x2g - x1g) * (y2g - y1g) - intsct + eps
-    iou = intsct / union
-
-    # smallest enclosing box
-    xc1 = torch.min(x1, x1g)
-    yc1 = torch.min(y1, y1g)
-    xc2 = torch.max(x2, x2g)
-    yc2 = torch.max(y2, y2g)
-    diag_len = ((xc2 - xc1) ** 2) + ((yc2 - yc1) ** 2) + eps
-
-    # centers of boxes
-    x_p = (x2 + x1) / 2
-    y_p = (y2 + y1) / 2
-    x_g = (x1g + x2g) / 2
-    y_g = (y1g + y2g) / 2
-    distance = ((x_p - x_g) ** 2) + ((y_p - y_g) ** 2)
-
-    # Eqn. (7)
-    loss = 1 - iou + (distance / diag_len)
-    if reduction == "mean":
-        loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
-    elif reduction == "sum":
-        loss = loss.sum()
-
-    return loss, iou
-
-
-def ciou_loss_original(
-    boxes1: torch.Tensor,
-    boxes2: torch.Tensor,
-    reduction: str = "none",
-    eps: float = 1e-7,
-) -> torch.Tensor:
-    """
-    Complete Intersection over Union Loss (Zhaohui Zheng et. al)
-    https://arxiv.org/abs/1911.08287
+def kfiou_loss(pred,
+               target,
+               pred_decode=None,
+               targets_decode=None,
+               fun=None,
+               beta=1.0 / 9.0,
+               eps=1e-6):
+    """Kalman filter IoU loss.
     Args:
-        boxes1, boxes2 (Tensor): box locations in XYXY format, shape (N, 4) or (4,).
-        reduction: 'none' | 'mean' | 'sum'
-                 'none': No reduction will be applied to the output.
-                 'mean': The output will be averaged.
-                 'sum': The output will be summed.
-        eps (float): small number to prevent division by zero
+        pred (torch.Tensor): Predicted bboxes.
+        target (torch.Tensor): Corresponding gt bboxes.
+        pred_decode (torch.Tensor): Predicted decode bboxes.
+        targets_decode (torch.Tensor): Corresponding gt decode bboxes.
+        fun (str): The function applied to distance. Defaults to None.
+        beta (float): Defaults to 1.0/9.0.
+        eps (float): Defaults to 1e-6.
+    Returns:
+        loss (torch.Tensor)
     """
+    xy_p = pred[:, :2]
+    xy_t = target[:, :2]
+    _, Sigma_p = xy_wh_r_2_xy_sigma(pred_decode)
+    _, Sigma_t = xy_wh_r_2_xy_sigma(targets_decode)
 
-    x1, y1, x2, y2 = boxes1.unbind(dim=-1)
-    x1g, y1g, x2g, y2g = boxes2.unbind(dim=-1)
+    # Smooth-L1 norm
+    diff = torch.abs(xy_p - xy_t)
+    xy_loss = torch.where(diff < beta, 0.5 * diff * diff / beta,
+                          diff - 0.5 * beta).sum(dim=-1)
+    Vb_p = 4 * Sigma_p.det().sqrt()
+    Vb_t = 4 * Sigma_t.det().sqrt()
+    K = Sigma_p.bmm((Sigma_p + Sigma_t).inverse())
+    Sigma = Sigma_p - K.bmm(Sigma_p)
+    Vb = 4 * Sigma.det().sqrt()
+    Vb = torch.where(torch.isnan(Vb), torch.full_like(Vb, 0), Vb)
+    KFIoU = Vb / (Vb_p + Vb_t - Vb + eps)
 
-    # TODO: use torch._assert_async() when pytorch 1.8 support is dropped
-    assert (x2 >= x1).all(), "bad box: x1 larger than x2"
-    assert (y2 >= y1).all(), "bad box: y1 larger than y2"
+    if fun == 'ln':
+        kf_loss = -torch.log(KFIoU + eps)
+    elif fun == 'exp':
+        kf_loss = torch.exp(1 - KFIoU) - 1
+    else:
+        kf_loss = 1 - KFIoU
 
-    # Intersection keypoints
-    xkis1 = torch.max(x1, x1g)
-    ykis1 = torch.max(y1, y1g)
-    xkis2 = torch.min(x2, x2g)
-    ykis2 = torch.min(y2, y2g)
-
-    intsct = torch.zeros_like(x1)
-    mask = (ykis2 > ykis1) & (xkis2 > xkis1)
-    intsct[mask] = (xkis2[mask] - xkis1[mask]) * (ykis2[mask] - ykis1[mask])
-    union = (x2 - x1) * (y2 - y1) + (x2g - x1g) * (y2g - y1g) - intsct + eps
-    iou = intsct / union
-
-    # smallest enclosing box
-    xc1 = torch.min(x1, x1g)
-    yc1 = torch.min(y1, y1g)
-    xc2 = torch.max(x2, x2g)
-    yc2 = torch.max(y2, y2g)
-    diag_len = ((xc2 - xc1) ** 2) + ((yc2 - yc1) ** 2) + eps
-
-    # centers of boxes
-    x_p = (x2 + x1) / 2
-    y_p = (y2 + y1) / 2
-    x_g = (x1g + x2g) / 2
-    y_g = (y1g + y2g) / 2
-    distance = ((x_p - x_g) ** 2) + ((y_p - y_g) ** 2)
-
-    # width and height of boxes
-    w_pred = x2 - x1
-    h_pred = y2 - y1
-    w_gt = x2g - x1g
-    h_gt = y2g - y1g
-    v = (4 / (math.pi ** 2)) * torch.pow((torch.atan(w_gt / h_gt) - torch.atan(w_pred / h_pred)), 2)
-    with torch.no_grad():
-        alpha = v / (1 - iou + v + eps)
-
-    # Eqn. (10)
-    loss = 1 - iou + (distance / diag_len) + alpha * v
-    if reduction == "mean":
-        loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
-    elif reduction == "sum":
-        loss = loss.sum()
+    loss = (xy_loss + kf_loss).clamp(0)
 
     return loss
+
+
+class KFLoss(nn.Module):
+    """Kalman filter based loss.
+    Args:
+        fun (str, optional): The function applied to distance.
+            Defaults to 'log1p'.
+        reduction (str, optional): The reduction method of the
+            loss. Defaults to 'mean'.
+        loss_weight (float, optional): The weight of loss. Defaults to 1.0.
+    Returns:
+        loss (torch.Tensor)
+    """
+
+    def __init__(self,
+                 fun='none',
+                 reduction='mean',
+                 loss_weight=1.0,
+                 **kwargs):
+        super(KFLoss, self).__init__()
+        assert reduction in ['none', 'sum', 'mean']
+        assert fun in ['none', 'ln', 'exp']
+        self.fun = fun
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+
+    def forward(self,
+                pred,
+                target,
+                weight=None,
+                avg_factor=None,
+                pred_decode=None,
+                targets_decode=None,
+                reduction_override=None,
+                **kwargs):
+        """Forward function.
+        Args:
+            pred (torch.Tensor): Predicted convexes.
+            target (torch.Tensor): Corresponding gt convexes.
+            weight (torch.Tensor, optional): The weight of loss for each
+                prediction. Defaults to None.
+            avg_factor (int, optional): Average factor that is used to average
+                the loss. Defaults to None.
+            pred_decode (torch.Tensor): Predicted decode bboxes.
+            targets_decode (torch.Tensor): Corresponding gt decode bboxes.
+            reduction_override (str, optional): The reduction method used to
+               override the original reduction method of the loss.
+               Defaults to None.
+        Returns:
+            loss (torch.Tensor)
+        """
+        assert reduction_override in (None, 'none', 'mean', 'sum')
+        reduction = (
+            reduction_override if reduction_override else self.reduction)
+        if (weight is not None) and (not torch.any(weight > 0)) and (
+                reduction != 'none'):
+            return (pred * weight).sum()
+        if weight is not None and weight.dim() > 1:
+            assert weight.shape == pred.shape
+            weight = weight.mean(-1)
+
+        return kfiou_loss(
+            pred,
+            target,
+            fun=self.fun,
+            weight=weight,
+            avg_factor=avg_factor,
+            pred_decode=pred_decode,
+            targets_decode=targets_decode,
+            reduction=reduction,
+            **kwargs) * self.loss_weight
