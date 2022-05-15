@@ -58,8 +58,8 @@ def diou_loss(
 ):
     preds8 = to_corners(preds)
     labels8 = to_corners(labels)
-    iou = calc_iou_array(preds8, labels8)
-    c2 = enclosing_box_length(preds8, labels8) + eps
+    iou = calc_iou_array(preds8, labels8).to(DEVICE)
+    c2 = enclosing_box_length(preds8, labels8).to(DEVICE) + eps
     d2 = torch.pow((preds[...,0] - labels[...,0]),2) + torch.pow((preds[...,1] - labels[...,1]),2).to(DEVICE)
     loss = 1 - iou + (d2 / c2)
     if yaw:
