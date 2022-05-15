@@ -29,6 +29,5 @@ if __name__ == "__main__":
     plot(ax[1], image, label, "no star")
 
     image, label = synthesize_data(has_star=True, noise_level=0.1)
-    label = change_yaw(label)
     plot(ax[2], image, label, f"star (less noise) with label {prettify_np(label)}")
     fig.savefig("example.png")

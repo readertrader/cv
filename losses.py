@@ -1,7 +1,7 @@
 # Taken from https://github.com/facebookresearch/detectron2
 import math
 import torch
-from utils import calc_iou, enclosing_box_length, calc_iou_array
+from utils import calc_iou, enclosing_box_length, calc_iou_array, to_corners
 import numpy as np
 
 def ciou_loss_batch(pred, gt, reduction='none'):
@@ -33,31 +33,40 @@ def diou_loss_batch(pred, gt, reduction='none', yaw=False):
     return losses, ious
 
 def ciou_loss(
-    boxes1,
-    boxes2,
+    preds,
+    labels,
+    reduction='mean',
     eps: float = 1e-7,
 ):
-    dloss, iou = diou_loss(boxes1, boxes2)
-
-    v = (4 / (math.pi ** 2)) * (boxes2[2] - boxes1[2])**2
+    dloss, iou = diou_loss(preds, labels, reduction='none')
+    v = (4 / (torch.pi ** 2)) * torch.pow((preds[...,2] - labels[...,2]), 2)
     with torch.no_grad():
         alpha = v / (1 - iou + v + eps)
 
     loss = dloss + alpha * v
+    if reduction == "mean":
+        loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
+        iou = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
     return loss, iou
 
 def diou_loss(
-    boxes1,
-    boxes2,
+    preds,
+    labels,
+    reduction="mean",
     yaw: bool = False,
     eps: float = 1e-7,
 ):
-    iou = calc_iou_array(boxes1, boxes2)
-    c2 = enclosing_box_length(boxes1, boxes2) + eps
-    d2 = ((boxes1[0] - boxes2[0])**2) + ((boxes1[1]-boxes2[1])**2)
+    preds8 = to_corners(preds)
+    labels8 = to_corners(labels)
+    iou = calc_iou_array(preds8, labels8)
+    c2 = enclosing_box_length(preds8, labels8) + eps
+    d2 = torch.pow((preds[...,0] - labels[...,0]),2) + torch.pow((preds[...,1] - labels[...,1]),2)
     loss = 1 - iou + (d2 / c2)
     if yaw:
-        loss += abs(boxes1[2] - boxes2[2]) / boxes2[2]
+        loss += torch.abs(preds[...,2] - labels[...,2]) / labels[...,2]
+    if reduction == "mean":
+        loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
+        iou = iou.mean() if iou.numel() > 0 else 0.0 * iou.sum()
     return loss, iou
 
 

@@ -1,3 +1,4 @@
+from statistics import median_high
 from typing import NamedTuple, Optional
 
 import numpy as np
@@ -19,13 +20,6 @@ class StarImage(NamedTuple):
 
 def _rotate(points: np.ndarray, theta: float) -> np.ndarray:
     return points @ np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
-
-def to_corners(arr):
-    points = np.array([[1, 1], [-1, 1], [-1, -1], [1, -1]]).astype(np.float)
-    points *= np.array([arr[3], arr[4]]) / 2
-    points = _rotate(points, arr[2])
-    points += np.array([arr[0], arr[1]])
-    return points
 
 def _corners(pos_x: float, pos_y: float, yaw: float, width: float, height: float) -> np.ndarray:
     points = np.array([[1, 1], [-1, 1], [-1, -1], [1, -1]]).astype(np.float)
@@ -201,27 +195,50 @@ def calc_iou(pred, label):
     return iou
 
 def calc_iou_array(pred, label):
-    t = Polygon(to_corners(label))
-    p = Polygon(to_corners(pred))
-    iou = t.intersection(p).area / t.union(p).area
-    return iou
+    B = pred.size()[0]
+    arr = torch.zeros(B)
+    for i in range(B):
+        p = Polygon(pred[i][0])
+        t = Polygon(label[i][0])
+        arr[i] = t.intersection(p).area / t.union(p).area
+    return arr.view([-1,1])
+
+def _rotate(points: np.ndarray, theta: float) -> np.ndarray:
+    return points @ np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+
+def to_corners(arr):
+    batch = arr.size()[0]
+    x = torch.FloatTensor([1, -1, -1, 1]).unsqueeze(0).unsqueeze(0).to(arr.device)
+    y = torch.FloatTensor([1, 1, -1, -1]).unsqueeze(0).unsqueeze(0).to(arr.device)
+    x1 = arr[..., 0:1]
+    y1 = arr[..., 1:2]
+    yaw = arr[..., 2:3]
+    w = arr[..., 3:4]
+    h = arr[...,4:5]
+    x = x*w/2
+    y = y*h/2
+    points = torch.stack([x, y], dim=-1)
+    sin = torch.sin(yaw)
+    cos = torch.cos(yaw)
+    row1 = torch.cat([cos, -sin], dim=-1)
+    row2 = torch.cat([sin, cos], dim=-1)  
+    rot_T = torch.stack([row1, row2], dim=-2) 
+    rotated = torch.bmm(points.view([-1, 4, 2]), rot_T.view([-1, 2, 2]))
+    rotated = rotated.view([batch, -1, 4, 2])  
+    rotated[..., 0] += x1
+    rotated[..., 1] += y1
+    return rotated
 
 def enclosing_box_length(pred, label):
-    t = _corners(*label)
-    p = _corners(*pred)
-    x_t = t[:,0]
-    y_t = t[:,1]
-    x_p = p[:,0]
-    y_p = p[:,1]
-    x = np.concatenate((x_t, x_p))
-    y = np.concatenate((y_p, y_t))
-    top = min(y)
-    bottom = max(y)
-    left = min(x)
-    right = max(x)
-    width = abs(right - left)
-    height = abs(bottom - top)
-    return height**2 + width**2
+    B = pred.size()[0]
+    arr = torch.zeros(B)
+    matr_w = torch.cat([pred[...,0], label[...,0]], dim=-1)
+    matr_h = torch.cat([pred[...,1], label[...,1]], dim=-1)
+    min_w = torch.min(matr_w,2).values
+    max_w = torch.max(matr_w,2).values
+    min_h = torch.min(matr_h,2).values
+    max_h = torch.max(matr_h,2).values
+    return torch.pow((max_h - min_h), 2) + torch.pow((max_w - min_w),2)
 
 def normalize(label, img_size=200):
     normalized_center = label[0:2] / img_size
@@ -239,10 +256,12 @@ def unnormalize(label, img_size=200):
     original = np.concatenate((center, yaw, size))
     return original
 
+# Need a method to unnormalize tensors to maintain Variable integrity to compute loss.backwards
 def unnormalize_tensor(label, img_size=200):
-    center = label[:, 0:2] * img_size
+    x = label[:, 0] * img_size
+    y = label[:,1] * img_size
     yaw = label[:, 2] * np.pi
-    yaw = yaw.reshape((yaw.shape[0], 1))
-    size = label[:,3:] * img_size
-    original = np.concatenate((center, yaw, size), axis=1)
+    w = label[:,3] * img_size
+    h = label[:,4] * img_size
+    original = torch.stack([x,y, yaw, w,h], dim=1)
     return original

@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import MultiStepLR
 from tqdm import tqdm
-from utils import DEVICE, change_yaw, synthesize_data, normalize, unnormalize
+from utils import DEVICE, change_yaw, synthesize_data, normalize, unnormalize, unnormalize_tensor
 from losses import diou_loss_batch, ciou_loss_batch
 
 
@@ -113,8 +113,8 @@ def train(model: StarModel, dl: StarDataset, num_epochs: int, optimizer, loss_fn
             preds = model(image)
             if localizer:
                 loss, iou = loss_fn(
-                    unnormalize(preds.cpu().detach().numpy()),
-                    unnormalize(label.cpu().detach().numpy())
+                    torch.unsqueeze(unnormalize_tensor(preds), 1),
+                    torch.unsqueeze(unnormalize_tensor(label), 1)
                 )
                 epoch_ious.append(iou)
                 epoch_losses.append(loss)
