@@ -204,6 +204,13 @@ def to_corners(arr):
     rotated[..., 1] += y1
     return rotated
 
+def create_fpn_label(label, img_size=200):
+    no_star = np.any(np.isnan(label))
+    if no_star:
+        return np.concatenate([np.array([0]), normalize(label, img_size=img_size)])
+    else:
+        return np.concatenate([np.array([1]), normalize(label,img_size=img_size)])
+
 def normalize(label, img_size=200):
     normalized_center = label[0:2] / img_size
     if label[2] >= np.pi:
