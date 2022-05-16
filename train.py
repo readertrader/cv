@@ -8,27 +8,28 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import MultiStepLR
 from tqdm import tqdm
-from utils import DEVICE, create_fpn_label, synthesize_data, normalize, unnormalize, unnormalize_tensor, to_corners, calc_iou_array
+from utils import DEVICE, create_fpn_label, synthesize_data, normalize, unnormalize, unnormalize_tensor, to_corners, calc_iou_array, norm_classifier
 from losses import modulated_loss, kfiou_loss
 from models.StarModel import StarModel
 
 # Dataloader
 # Normalizes the label
+
 class StarDataset(torch.utils.data.Dataset):
     """Return star image and labels"""
 
-    def __init__(self, data_size=50000, has_star=True, mtype='localizer'):
+    def __init__(self, data_size=50000, has_star=True, classifier=False):
         self.data_size = data_size
         self.has_star = has_star
-        self.mtype=mtype
+        self.classifier=classifier
 
     def __len__(self) -> int:
         return self.data_size
 
     def __getitem__(self, idx) -> t.Tuple[torch.Tensor, torch.Tensor]:
         image, label = synthesize_data(has_star=self.has_star)
-        if self.mtype == 'fpn':
-            label = create_fpn_label(label)
+        if self.classifier:
+            label = norm_classifier(label)
         else:
             label = normalize(label)
         return image[None], label
@@ -105,14 +106,14 @@ def main():
     for param in star_model.backbone.parameters():
         param.requires_grad = False
 
-    for param in star_model.localizer.parameters():
+    for param in star_model.regressor.parameters():
         param.requires_grad = False
 
     epochs=5
     optimizer = torch.optim.Adam(star_model.parameters())
     star_model = train(
         star_model,
-        torch.utils.data.DataLoader(StarDataset(data_size=16000, has_star=None), batch_size=batch_size, shuffle=True),
+        torch.utils.data.DataLoader(StarDataset(data_size=16000, has_star=None, classifier=True), batch_size=batch_size),
         num_epochs=epochs,
         optimizer=optimizer,
         loss_fn=loss_classifier, 
