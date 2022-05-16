@@ -1,3 +1,4 @@
+from selectors import EpollSelector
 from statistics import median_high
 from typing import NamedTuple, Optional
 
@@ -236,3 +237,10 @@ def unnormalize_tensor(label, img_size=200):
     h = label[:,4] * img_size
     original = torch.stack([x,y, yaw, w,h], dim=1)
     return original
+
+def norm_classifier(label):
+    no_star = np.any(np.isnan(label))
+    if no_star:
+        return np.array([0])
+    else:
+        return np.array([1])
