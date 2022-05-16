@@ -34,21 +34,6 @@ class FPN(nn.Module):
 
         self.avg_pooling = nn.AdaptiveAvgPool2d((1, 1))
 
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1)
-            # nn.Sigmoid() ## using BCE with logits
-        )
-
-        self.regressor = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(256,256),
-            nn.ReLU(),
-            nn.Linear(256, 5)
-        )
-
     def forward(self, x):
         x = self.conv1_1(x)
         u1 = self.conv1_2(x)
@@ -68,14 +53,9 @@ class FPN(nn.Module):
         t2 = self._upsample_add(t3, self.latlayer2(u2))
 
         t2 = self.smooth2(t2)
-
-        classification = self.classifier(self.avg_pooling(t5))
-        regression = self.regressor(self.avg_pooling(t2))
-
-        prob = classification.view(x.shape[0], 1)
-        preds = regression.view(x.shape[0], 5)
-        prediction = torch.cat([prob,preds], dim=1)
-        return prediction
+        clf = self.avg_pooling(t5)
+        regr = self.avg_pooling(t2)
+        return clf, regr
 
     def _upsample_add(self, x, y):
         '''Upsample and add two feature maps.
@@ -95,3 +75,56 @@ class FPN(nn.Module):
         '''
         _,_,H,W = y.size()
         return F.upsample(x, size=(H,W), mode='bilinear') + y
+
+class Classifier(nn.Module):
+    def __init__(self):
+        super(Classifier, self).__init__()
+        self.fc1 = nn.Linear(256, 256)
+        self.fc2 = nn.Linear(256, 1)
+
+    def forward(self, x):
+        x = torch.flatten(x,1)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+class Regressor(nn.Module):
+    def __init__(self):
+        super(Regressor, self).__init__()
+        self.fc1 = nn.Linear(256, 256)
+        self.fc2 = nn.Linear(256, 5)
+
+    def forward(self, x):
+        x = torch.flatten(x,1)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+class FPNModel(nn.Module):
+    def __init__(self):
+        super(FPNModel, self).__init__()
+        self.backbone = FPN()
+        self.regressor = Regressor()
+        self.classifier = Classifier()
+        self.head = 'regressor'
+
+    def forward(self, x):
+        clf, regr = self.backbone(x)
+        regr = self.regressor(regr)
+        clf = self.classifier(clf)
+        prob = clf.view(x.shape[0], 1)
+        preds = regr.view(x.shape[0],5)
+        prediction = torch.cat([prob, preds], dim=1)
+        return prediction
+
+# Run file to see summary
+if __name__ == "__main__":
+    from torchsummary import summary
+
+    inp = torch.rand((2, 1, 200, 200))
+    net = FPNModel()
+    out = net(inp)
+
+    # print(out.shape)
+    summary(net, inp.shape[1:])
+    # print(net)

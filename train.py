@@ -10,7 +10,7 @@ from torch.optim.lr_scheduler import MultiStepLR
 from tqdm import tqdm
 from utils import DEVICE, create_fpn_label, synthesize_data, normalize, unnormalize, unnormalize_tensor, to_corners, calc_iou_array
 from losses import modulated_loss, kfiou_loss
-from models.localizer import StarModel
+from models.StarModel import StarModel
 
 # Dataloader
 # Normalizes the label

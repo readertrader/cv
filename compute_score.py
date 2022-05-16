@@ -1,14 +1,14 @@
 import numpy as np
 import torch
 from tqdm import tqdm
-from train import StarModel
+from models.StarModel import StarModel
 from utils import DEVICE, score_iou, synthesize_data
 
 
-def load_model():
+def load_model(fn):
     model = StarModel()
     model.to(DEVICE)
-    with open("model.pickle", "rb") as f:
+    with open(fn, "rb") as f:
         state_dict = torch.load(f, map_location=DEVICE)
     model.load_state_dict(state_dict)
     model.eval()
@@ -16,7 +16,7 @@ def load_model():
 
 
 def eval(*, n_examples: int = 1024) -> None:
-    model = load_model()
+    model = load_model(fn)
     scores = []
     for _ in tqdm(range(n_examples)):
         image, label = synthesize_data()
@@ -31,4 +31,5 @@ def eval(*, n_examples: int = 1024) -> None:
 
 
 if __name__ == "__main__":
-    eval()
+    fn = 'model.pickle'
+    eval(fn)
