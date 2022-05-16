@@ -1,7 +1,9 @@
 import torch
 from utils import DEVICE
 from torch import nn
+import torch.nn.functional as F
 
+# https://arxiv.org/abs/1911.08299
 def modulated_loss(pred, label):
     x1, x2 = pred[:, 0], label[:, 0]
     y1, y2 = pred[:, 1], label[:, 1]
@@ -11,13 +13,10 @@ def modulated_loss(pred, label):
     lcp = torch.abs(x1 - x2) + torch.abs(y1 - y2)
     lmr = torch.min(
         lcp + torch.abs(w1 - w2) + torch.abs(h1 - h2) + torch.abs(yaw1 - yaw2),
-        lcp
-        + torch.abs(w1 - h2)
-        + torch.abs(h1 - w2)
-        + torch.abs(torch.pi/2 - torch.abs(yaw1 - yaw2)),
+        lcp + torch.abs(w1 - h2) + torch.abs(h1 - w2) + torch.abs(torch.pi/2 - torch.abs(yaw1 - yaw2))
     )
-
     return lmr
+
 # KFIOU implementation from https://github.com/open-mmlab/mmrotate/blob/main/mmrotate/models/losses/kf_iou_loss.py
 def xy_wh_r_2_xy_sigma(xywhr):
     """Convert oriented bounding box to 2-D Gaussian distribution.
@@ -161,3 +160,20 @@ class KFLoss(nn.Module):
             targets_decode=targets_decode,
             reduction=reduction,
             **kwargs) * self.loss_weight
+
+def kfiou_loss_fpn(pred,
+               target,
+               pred_decode=None,
+               targets_decode=None,
+               fun=None,
+               beta=1.0 / 9.0,
+               eps=1e-6):
+
+    # instances with no ships to pred bbox
+    no_star = torch.nonzero(target[:, 0] == 0, as_tuple=True)
+    loss_clf = F.binary_cross_entropy_with_logits(pred[:,0], target[:,0], reduction='none')
+    loss_regressor = kfiou_loss(pred, target, pred_decode, targets_decode)
+    loss_regressor[no_star] = 0
+    loss = loss_clf + loss_regressor
+
+    return loss, loss_clf, loss_regressor
