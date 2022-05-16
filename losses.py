@@ -169,9 +169,9 @@ def kfiou_loss_fpn(pred,
                beta=1.0 / 9.0,
                eps=1e-6):
 
-    # instances with no ships to pred bbox
     no_star = torch.nonzero(target[:, 0] == 0, as_tuple=True)
     loss_clf = F.binary_cross_entropy_with_logits(pred[:,0], target[:,0], reduction='none')
+    print(loss_clf.mean())
     loss_regressor = kfiou_loss(pred, target, pred_decode, targets_decode)
     loss_regressor[no_star] = 0
     loss = loss_clf + loss_regressor
